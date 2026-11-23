@@ -1,1 +1,208 @@
-s
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Дзержинск — 3D карта</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#cfe3f2}
+  #info{position:absolute;top:12px;left:12px;right:12px;max-width:340px;background:rgba(255,255,255,.92);
+        padding:10px 14px;border-radius:12px;font-size:14px;box-shadow:0 2px 10px rgba(0,0,0,.15);color:#111}
+  #info b{display:block;font-size:16px;margin-bottom:4px}
+  #btn{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);padding:10px 18px;border:0;
+       border-radius:10px;background:#2563eb;color:#fff;font-size:15px;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="info"><b>Дзержинск</b>Потяните, чтобы вращать. Колесо — масштаб. Нажмите на здание.</div>
+<button id="btn">Авто-вращение: выкл</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const infoBox = document.getElementById('info');
+const btn = document.getElementById('btn');
+
+// ---------- Сцена ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xcfe3f2);
+scene.fog = new THREE.Fog(0xcfe3f2, 1500, 4500);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 1, 10000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+sun.position.set(400, 800, 300);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -1400, right: 1400, top: 1400, bottom: -1400, far: 3000 });
+scene.add(sun);
+
+// ---------- Земля ----------
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(4000, 4000),
+  new THREE.MeshLambertMaterial({ color: 0x9bc98b })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// ---------- Река Ока (схематично) ----------
+const riverZ = x => {
+  const t = (x + 1600) / 3200;
+  return -300 + Math.sin(t * 5) * 180 + t * 250;
+};
+const riverPts = [];
+for (let i = 0; i <= 40; i++) {
+  const x = -1600 + (i / 40) * 3200;
+  riverPts.push(new THREE.Vector3(x, 0, riverZ(x)));
+}
+const river = new THREE.Mesh(
+  new THREE.TubeGeometry(new THREE.CatmullRomCurve3(riverPts), 200, 35, 6, false),
+  new THREE.MeshLambertMaterial({ color: 0x3b82c4 })
+);
+river.scale.y = 0.08;
+river.position.y = 0.3;
+scene.add(river);
+
+// ---------- Дороги ----------
+const roadMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+for (let k = -20; k <= 21; k++) {
+  const roadX = new THREE.Mesh(new THREE.PlaneGeometry(14, 4000), roadMat);
+  roadX.rotation.x = -Math.PI / 2;
+  roadX.position.set(k * 80 - 40, 0.1, 0);
+  scene.add(roadX);
+
+  const roadZ = new THREE.Mesh(new THREE.PlaneGeometry(4000, 14), roadMat);
+  roadZ.rotation.x = -Math.PI / 2;
+  roadZ.position.set(0, 0.1, k * 80 - 40);
+  scene.add(roadZ);
+}
+
+// ---------- Здания (детерминированный генератор) ----------
+let seed = 42;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+const palette = [0xe8dcc5, 0xd9d2c3, 0xf2e6c9, 0xc9b79c, 0xb8c4cc, 0xe0cfb0];
+const buildings = [];
+
+for (let i = -20; i <= 20; i++) {
+  for (let j = -20; j <= 20; j++) {
+    const x = i * 80 + (rnd() - 0.5) * 10;
+    const z = j * 80 + (rnd() - 0.5) * 10;
+    if (Math.abs(z - riverZ(x)) < 70) continue;   // не строим в русле
+    if (rnd() < 0.15) continue;                   // пустые участки (парки, пустыри)
+
+    const d = Math.hypot(x, z);
+    const floors = Math.max(2, Math.round((1 - d / 1500) * 10 + rnd() * 4));
+    const h = floors * 3.2;
+    const w = 45 + rnd() * 20;
+    const depth = 35 + rnd() * 20;
+
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(w, h, depth),
+      new THREE.MeshLambertMaterial({ color: palette[Math.floor(rnd() * palette.length)] })
+    );
+    mesh.position.set(x, h / 2, z);
+    mesh.castShadow = mesh.receiveShadow = true;
+    mesh.userData = { floors, d };
+    scene.add(mesh);
+    buildings.push(mesh);
+  }
+}
+
+// ---------- Подписи ----------
+function label(text, pos, color = '#111') {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(255,255,255,0.9)';
+  g.beginPath(); g.roundRect(8, 16, 496, 96, 20); g.fill();
+  g.fillStyle = color;
+  g.font = 'bold 48px system-ui, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, 256, 64);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c) }));
+  sprite.position.copy(pos);
+  sprite.scale.set(180, 45, 1);
+  scene.add(sprite);
+}
+label('Центр города', new THREE.Vector3(0, 90, 0));
+label('Ока', new THREE.Vector3(riverPts[20].x, 60, riverPts[20].z), '#1e5fa8');
+label('Жилые кварталы', new THREE.Vector3(-500, 80, 400));
+label('Окраина', new THREE.Vector3(700, 60, -600));
+
+// ---------- Управление камерой ----------
+let theta = 0.6, phi = 0.9, radius = 900, auto = false;
+let dragging = false, moved = false, px = 0, py = 0;
+const target = new THREE.Vector3(0, 0, 0);
+
+function updateCamera() {
+  camera.position.set(
+    target.x + radius * Math.sin(phi) * Math.sin(theta),
+    radius * Math.cos(phi),
+    target.z + radius * Math.sin(phi) * Math.cos(theta)
+  );
+  camera.lookAt(target);
+}
+
+const canvas = renderer.domElement;
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+canvas.addEventListener('pointerdown', e => {
+  dragging = true; moved = false; px = e.clientX; py = e.clientY;
+});
+canvas.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - px, dy = e.clientY - py;
+  if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+  theta -= dx * 0.005;
+  phi = Math.min(1.5, Math.max(0.15, phi - dy * 0.005));
+  px = e.clientX; py = e.clientY;
+});
+canvas.addEventListener('pointerup', e => {
+  dragging = false;
+  if (moved) return;
+  mouse.x = (e.clientX / innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const hit = raycaster.intersectObjects(buildings)[0];
+  if (hit) {
+    const { floors, d } = hit.object.userData;
+    const zone = d < 400 ? 'Центр' : d < 900 ? 'Жилой район' : 'Окраина';
+    infoBox.innerHTML = `<b>${zone}</b>Этажность: ${floors}<br>Расстояние от центра: ${Math.round(d)} м (условно)`;
+  }
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  radius = Math.min(2500, Math.max(150, radius * (1 + e.deltaY * 0.001)));
+}, { passive: false });
+
+btn.addEventListener('click', () => {
+  auto = !auto;
+  btn.textContent = 'Авто-вращение: ' + (auto ? 'вкл' : 'выкл');
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- Цикл отрисовки ----------
+function animate() {
+  requestAnimationFrame(animate);
+  if (auto) theta += 0.002;
+  updateCamera();
+  renderer.render(scene, camera);
+}
+updateCamera();
+animate();
+</script>
+</body>
+</html>
